@@ -1,11 +1,40 @@
 from datetime import timedelta
 import asyncio 
 import inspect
-from typing import Callable, Iterable, Literal
+from typing import Callable, Iterable, Literal, Coroutine
 from collections import OrderedDict
-import uvloop as uv
 import uuid
 from functools import partial
+import uvloop as uv
+
+
+class Event[Inbound, Outbound]:
+    def __init__(self):
+        self.delegates:set[Callable[[Inbound], Outbound]] = set()
+        self.awaiting:set[uuid.UUID] = set()
+
+    def emit(self, *args:Inbound) -> Iterable[Outbound]:
+        self.awaiting.clear()
+        return [delegate(*args) for delegate in self.delegates]
+
+    def __call__(self, *args:Inbound) -> Iterable[Outbound]:
+        return self.emit(*args)
+    
+    def __add__(self, other:Callable[[Inbound], Outbound]):
+        self.delegates.add(other)
+
+    def __sub__(self, other:Callable[[Inbound], Outbound]):
+        if other in self.delegates:
+            self.delegates.remove(other)
+
+    @property
+    async def invoked(self) -> Coroutine:
+        id = uuid.uuid4()
+        self.awaiting.add(id)
+        while id in self.awaiting:
+            await asyncio.sleep(0)
+
+    
 
 
 class Stream[Inbound, Outbound]:
@@ -19,6 +48,7 @@ class Stream[Inbound, Outbound]:
         self.id = str(uuid.uuid4())
         self.upstream:set['Stream'] = set()
         self.downstream:set['Stream'] = set()
+        self.on_done:Event[None, None] = Event()
 
         if upstream is not None:
             if isinstance(upstream, Iterable):
@@ -30,7 +60,6 @@ class Stream[Inbound, Outbound]:
         self.args = args
         self.kwargs = kwargs
 
-        self.done = False
 
         self._vis_node_props = {
             'shape':'ellipse',
@@ -76,9 +105,9 @@ class Stream[Inbound, Outbound]:
 
 
     async def __call__(self, x:Outbound):
-        self.done = False
         await asyncio.gather(*[i.update(x, who=self) for i in self.downstream])
-        self.done = True
+        self.on_done()
+
 
 
     async def update(self, x:Inbound, who:'Stream'=None):
@@ -342,8 +371,7 @@ class WaitTillDone(Stream):
 
 
     async def update(self, x, who:Stream=None):
-        while not all(req.done for req in self.require):
-            await asyncio.sleep(0)
+        await asyncio.gather(*[req.on_done.invoked for req in self.require])
         await super().update(x, who)
 
 
@@ -429,7 +457,12 @@ if __name__ == '__main__':
 
     source = Source()
     node = Filter[float](Stream(source, wait, time=0.25), lambda x: x % 2)
-    sink = Sink(node, print)
+    delay1 = Stream(node, wait, time=0.25)
+    delay2 = Stream(node, wait, time=1.0)
+    Sink(delay1, print)
+    Sink(delay2, print)
+    w = WaitTillDone(node, [delay1, delay2])
+    sink = Sink(w, lambda x: print(f"{x} done!"))
 
     pipeline = Pipeline(source) 
     pipeline.visualize_gv(
