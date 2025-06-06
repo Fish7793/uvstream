@@ -12,8 +12,11 @@ class Event[Inbound, Outbound]:
     def __init__(self):
         self.delegates:set[Callable[[Inbound], Outbound]] = set()
         self.awaiting:set[uuid.UUID] = set()
+        self.awaited_args:dict[uuid.UUID, Inbound] = dict()
 
     def emit(self, *args:Inbound) -> Iterable[Outbound]:
+        for id in self.awaiting:
+            self.awaited_args[id] = args
         self.awaiting.clear()
         return [delegate(*args) for delegate in self.delegates]
 
@@ -33,6 +36,7 @@ class Event[Inbound, Outbound]:
         self.awaiting.add(id)
         while id in self.awaiting:
             await asyncio.sleep(0)
+        return self.awaited_args.pop(id)
 
     
 
