@@ -166,7 +166,7 @@ class Stream[Inbound, Outbound]:
     
 
 
-class Source[Outbound](Stream):
+class Source[T](Stream[None, T]):
     def __init__(self):
         super().__init__(None, None)
         self.event_loop = None
@@ -174,15 +174,15 @@ class Source[Outbound](Stream):
         self._vis_node_props['size'] = 15
 
 
-    def emit(self, x:Outbound):
+    def emit(self, x:T):
         uv.run(self(x))
 
 
 
-class Sink[In](Stream):
+class Sink[T](Stream[T, None]):
     def __init__(self, 
                  upstream:Stream|None=None, 
-                 fn:Callable[[In], None]|None=None,
+                 fn:Callable[[T], None]|None=None,
                  *args,
                  **kwargs):
         
@@ -191,7 +191,7 @@ class Sink[In](Stream):
         self._vis_node_props['color'] = 'black'
             
 
-    async def update(self, x:In, who:'Stream'=None):
+    async def update(self, x:T, who:'Stream'=None):
         if self.fn is None:
             return
         
@@ -203,12 +203,12 @@ class Sink[In](Stream):
 
 
 
-class Map(Stream):
+class Map[Inbound, Outbound](Stream[Inbound, Outbound]):
     pass
 
 
 
-class Zip[Inbound](Stream):
+class Zip[T](Stream[T, tuple[T]]):
 
     def __init__(self, 
                 upstream:Stream|Iterable[Stream], 
@@ -219,7 +219,7 @@ class Zip[Inbound](Stream):
                 *args,
                 **kwargs):
         
-        self._buffer:OrderedDict[Stream, Inbound|None] = OrderedDict()
+        self._buffer:OrderedDict[Stream, T|None] = OrderedDict()
         self._track:dict[Stream, bool] = dict()
 
         if isinstance(require, Stream):
@@ -255,7 +255,7 @@ class Zip[Inbound](Stream):
         self._buffer.update((k, None) for k in self._buffer.keys())
 
 
-    async def update(self, x:Inbound, who:Stream=None):
+    async def update(self, x:T, who:Stream=None):
         self._buffer[who] = x
         self._track[who] = True
 
@@ -277,18 +277,18 @@ class Zip[Inbound](Stream):
 
 
 
-class Filter[Inbound](Stream):
+class Filter[T](Stream):
 
     def __init__(self, 
                  upstream:Stream|None=None, 
-                 fn:Callable[[Inbound], bool]|None=None, 
+                 fn:Callable[[T], bool]|None=None, 
                  *args, 
                  **kwargs):
         
         super().__init__(upstream, fn, *args, **kwargs)
 
 
-    async def update(self, x:Inbound, who:Stream=None):
+    async def update(self, x:T, who:Stream=None):
         if self.fn is None:
             return
         
@@ -304,7 +304,7 @@ class Filter[Inbound](Stream):
 
 
 
-class Window[Inbound](Stream):
+class Window[T](Stream[T, Iterable[T]]):
 
     def __init__(
             self, 
@@ -320,11 +320,11 @@ class Window[Inbound](Stream):
         self._buffer = []
 
 
-    async def __call__(self, x:Iterable[Inbound]):
+    async def __call__(self, x:Iterable[T]):
         return await super().__call__(x)
 
 
-    async def update(self, x:Inbound, who:Stream=None):
+    async def update(self, x:T, who:Stream=None):
         if len(self._buffer) > self.window_size:
             self._buffer.pop(0)
         
@@ -335,23 +335,23 @@ class Window[Inbound](Stream):
 
         
 
-class Unpack[Outbound](Stream):
+class Unpack[T](Stream[Iterable[T], T]):
 
     def __init__(
             self, 
             upstream:Stream=None, 
-            fn:Callable[[Outbound], Outbound]=None, 
+            fn:Callable[[T], T]=None, 
             *args, 
             **kwargs):
         
         super().__init__(upstream, fn, *args, **kwargs)
 
     
-    async def __call__(self, x:Outbound):
+    async def __call__(self, x:T):
         return await super().__call__(x)
     
 
-    async def update(self, x:Iterable[Outbound], who:Stream=None):
+    async def update(self, x:Iterable[T], who:Stream=None):
         if not isinstance(x, Iterable):
             await super().update(x)
             return 
@@ -360,7 +360,7 @@ class Unpack[Outbound](Stream):
             await super().update(item, who)
 
 
-class WaitTillDone(Stream):
+class WaitTillDone[T](Stream[T, T]):
     def __init__(
             self, 
             upstream:Stream=None, 
@@ -374,7 +374,7 @@ class WaitTillDone(Stream):
         super().__init__(upstream, None, *args, **kwargs)
 
 
-    async def update(self, x, who:Stream=None):
+    async def update(self, x:T, who:Stream=None):
         await asyncio.gather(*[req.on_done.invoked for req in self.require])
         await super().update(x, who)
 
@@ -476,3 +476,5 @@ if __name__ == '__main__':
         links_force_distance=125,
     ).export_html('_.html', overwrite=True)
     _ = [source.emit(v) for v in [1, 2, 3, 4, 5]] 
+    from pl import *
+    PLStream()
