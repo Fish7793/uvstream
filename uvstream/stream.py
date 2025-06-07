@@ -9,10 +9,12 @@ import uvloop as uv
 
 
 class Event[Inbound, Outbound]:
+
     def __init__(self):
         self.delegates:set[Callable[[Inbound], Outbound]] = set()
         self.awaiting:set[uuid.UUID] = set()
         self.awaited_args:dict[uuid.UUID, Inbound] = dict()
+
 
     def emit(self, *args:Inbound) -> Iterable[Outbound]:
         for id in self.awaiting:
@@ -20,15 +22,21 @@ class Event[Inbound, Outbound]:
         self.awaiting.clear()
         return [delegate(*args) for delegate in self.delegates]
 
+
     def __call__(self, *args:Inbound) -> Iterable[Outbound]:
         return self.emit(*args)
     
+
     def __add__(self, other:Callable[[Inbound], Outbound]):
         self.delegates.add(other)
+        return self
+
 
     def __sub__(self, other:Callable[[Inbound], Outbound]):
         if other in self.delegates:
             self.delegates.remove(other)
+        return self
+
 
     @property
     async def invoked(self) -> Coroutine:
@@ -476,5 +484,4 @@ if __name__ == '__main__':
         links_force_distance=125,
     ).export_html('_.html', overwrite=True)
     _ = [source.emit(v) for v in [1, 2, 3, 4, 5]] 
-    from pl import *
-    PLStream()
+    
