@@ -6,6 +6,7 @@ from collections import OrderedDict
 import uuid
 from functools import partial
 import uvloop as uv
+from functools import wraps, partial 
 
 
 class Event[Inbound, Outbound]:
@@ -47,6 +48,17 @@ class Event[Inbound, Outbound]:
         return self.awaited_args.pop(id)
 
     
+
+def register_stream(name:str=None):
+    def decorator(cls):
+        @wraps(cls)
+        def wrapper(self:Stream, *args, **kwargs):
+            instance = cls(self, *args, **kwargs)
+            return instance
+        setattr(Stream, name if name else cls.__name__.lower(), wrapper)
+        return cls
+    return decorator
+
 
 
 class Stream[Inbound, Outbound]:
@@ -171,7 +183,7 @@ class Stream[Inbound, Outbound]:
 
     def _edge_tuples(self) -> list[tuple[int, int, dict]]:
         return [(stream.id, self.id, self._vis_edge_props) for stream in self.upstream]
-    
+        
 
 
 class Source[T](Stream[None, T]):
@@ -187,6 +199,7 @@ class Source[T](Stream[None, T]):
 
 
 
+@register_stream()
 class Sink[T](Stream[T, None]):
     def __init__(self, 
                  upstream:Stream|None=None, 
@@ -210,12 +223,12 @@ class Sink[T](Stream[T, None]):
         self.fn(x, *self.args, **self.kwargs)
 
 
-
+@register_stream()
 class Map[Inbound, Outbound](Stream[Inbound, Outbound]):
     pass
 
 
-
+@register_stream()
 class Zip[T](Stream[T, tuple[T]]):
 
     def __init__(self, 
@@ -284,7 +297,7 @@ class Zip[T](Stream[T, tuple[T]]):
             await super().update(vals, who=who)        
 
 
-
+@register_stream()
 class Filter[T](Stream):
 
     def __init__(self, 
@@ -311,7 +324,7 @@ class Filter[T](Stream):
         await self(x)
 
 
-
+@register_stream()
 class Window[T](Stream[T, Iterable[T]]):
 
     def __init__(
@@ -342,7 +355,7 @@ class Window[T](Stream[T, Iterable[T]]):
             await self(self._buffer)
 
         
-
+@register_stream()
 class Unpack[T](Stream[Iterable[T], T]):
 
     def __init__(
@@ -367,7 +380,7 @@ class Unpack[T](Stream[Iterable[T], T]):
         for item in x:
             await super().update(item, who)
 
-
+@register_stream()
 class WaitTillDone[T](Stream[T, T]):
     def __init__(
             self, 
@@ -468,20 +481,22 @@ if __name__ == '__main__':
 
 
     source = Source()
-    node = Filter[float](Stream(source, wait, time=0.25), lambda x: x % 2)
-    delay1 = Stream(node, wait, time=0.25)
-    delay2 = Stream(node, wait, time=1.0)
-    Sink(delay1, print)
-    Sink(delay2, print)
-    w = WaitTillDone(node, [delay1, delay2])
-    sink = Sink(w, lambda x: print(f"{x} done!"))
+    source.sink(lambda x: print('hi'))
+    # node = Filter[float](Stream(source, wait, time=0.25), lambda x: x % 2)
+    # delay1 = Stream(node, wait, time=0.25)
+    # delay2 = Stream(node, wait, time=1.0)
+    # Sink(delay1, print)
+    # Sink(delay2, print)
+    # w = WaitTillDone(node, [delay1, delay2])
+    # sink = Sink(w, lambda x: print(f"{x} done!"))
 
     pipeline = Pipeline(source) 
-    pipeline.visualize_gv(
-        edge_curvature=0.1, 
-        use_many_body_force=True,
-        many_body_force_strength=-200,
-        links_force_distance=125,
-    ).export_html('_.html', overwrite=True)
+    # pipeline.visualize_gv(
+    #     edge_curvature=0.1, 
+    #     use_many_body_force=True,
+    #     many_body_force_strength=-200,
+    #     links_force_distance=125,
+    # ).export_html('_.html', overwrite=True)
     _ = [source.emit(v) for v in [1, 2, 3, 4, 5]] 
+    
     
