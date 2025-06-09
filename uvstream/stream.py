@@ -1,7 +1,7 @@
 from datetime import timedelta
 import asyncio 
 import inspect
-from typing import Callable, Iterable, Literal, Coroutine
+from typing import Callable, Iterable, Literal, Coroutine, Type, TYPE_CHECKING
 from collections import OrderedDict
 import uuid
 from functools import partial
@@ -50,9 +50,9 @@ class Event[Inbound, Outbound]:
     
 
 def register_stream(name:str=None):
-    def decorator(cls):
+    def decorator(cls:Type) -> Type:
         @wraps(cls)
-        def wrapper(self:Stream, *args, **kwargs):
+        def wrapper(self:Stream, *args, **kwargs) -> Stream:
             instance = cls(self, *args, **kwargs)
             return instance
         setattr(Stream, name if name else cls.__name__.lower(), wrapper)
@@ -133,7 +133,6 @@ class Stream[Inbound, Outbound]:
         self.on_done()
 
 
-
     async def update(self, x:Inbound, who:'Stream'=None):
         if self.fn is None:
             await self(x)
@@ -184,6 +183,21 @@ class Stream[Inbound, Outbound]:
     def _edge_tuples(self) -> list[tuple[int, int, dict]]:
         return [(stream.id, self.id, self._vis_edge_props) for stream in self.upstream]
         
+
+    if TYPE_CHECKING:
+        def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Sink': ...
+        def map[Inbound, Outbound](self, fn:Callable[[Inbound], Outbound], *args, **kwargs) -> 'Map': ...
+        def zip(self, 
+                require:'Stream'|Iterable['Stream']|None=None, 
+                wait_for_all:bool=True, 
+                purge_on_partial:bool=False, 
+                window:timedelta=timedelta(seconds=0), 
+                *args, 
+                **kwargs) -> 'Zip': ...
+        def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Filter': ...
+        def window(self, window_size:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Window': ...
+        def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Unpack': ...
+        def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'WaitTillDone': ...
 
 
 class Source[T](Stream[None, T]):
