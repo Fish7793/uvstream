@@ -5,7 +5,7 @@ if not find_spec('polars'):
 
 import polars as pl
 
-from stream import *
+from uvstream.stream import *
 
 PLStream = Stream[pl.DataFrame, pl.DataFrame]
 PLSource = Source[pl.DataFrame]

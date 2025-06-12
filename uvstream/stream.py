@@ -1,12 +1,19 @@
-from datetime import timedelta
-import asyncio 
+from datetime import timedelta, datetime
 import inspect
-from typing import Callable, Iterable, Literal, Coroutine, Type, TYPE_CHECKING
+from functools import wraps, partial 
+from typing import Callable, Iterable, Literal, Coroutine, Type
 from collections import OrderedDict
 import uuid
-from functools import partial
+import re
 import uvloop as uv
-from functools import wraps, partial 
+import asyncio 
+asyncio.set_event_loop_policy(uv.EventLoopPolicy())
+
+
+import threading
+LOOP = asyncio.new_event_loop()
+LOOP_THREAD = threading.Thread(target=LOOP.run_forever, daemon=True)
+LOOP_THREAD.start()
 
 
 class Event[Inbound, Outbound]:
@@ -48,17 +55,20 @@ class Event[Inbound, Outbound]:
         return self.awaited_args.pop(id)
 
     
+snake_case_regex = re.compile('((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))')
 
 def register_stream(name:str=None):
     def decorator(cls:Type) -> Type:
-        @wraps(cls)
+        @wraps(cls.__init__)
         def wrapper(self:Stream, *args, **kwargs) -> Stream:
             instance = cls(self, *args, **kwargs)
             return instance
-        setattr(Stream, name if name else cls.__name__.lower(), wrapper)
+        if name:
+            setattr(Stream, name, wrapper)
+        else:
+            setattr(Stream, snake_case_regex.sub(r'_\1', cls.__name__).lower(), wrapper)
         return cls
     return decorator
-
 
 
 class Stream[Inbound, Outbound]:
@@ -66,13 +76,14 @@ class Stream[Inbound, Outbound]:
     def __init__(self, 
                  upstream:'Stream|Iterable[Stream]|None'=None, 
                  fn:Callable[[Inbound], Outbound]|None=None,
+                 name:str|None=None,
                  *args,
                  **kwargs):
-        
         self.id = str(uuid.uuid4())
         self.upstream:set['Stream'] = set()
         self.downstream:set['Stream'] = set()
         self.on_done:Event[None, None] = Event()
+        self.event_loop = LOOP
 
         if upstream is not None:
             if isinstance(upstream, Iterable):
@@ -81,6 +92,10 @@ class Stream[Inbound, Outbound]:
                 self.add_upstream(upstream)
 
         self.fn = fn
+
+        if name:
+            self.alias(name)
+
         self.args = args
         self.kwargs = kwargs
 
@@ -129,8 +144,14 @@ class Stream[Inbound, Outbound]:
 
 
     async def __call__(self, x:Outbound):
-        await asyncio.gather(*[i.update(x, who=self) for i in self.downstream])
+        async with asyncio.TaskGroup() as group:
+            for i in self.downstream:
+                group.create_task(i.update(x, who=self))
         self.on_done()
+
+
+    def emit(self, x:Outbound):
+        asyncio.run_coroutine_threadsafe(self(x), self.event_loop)
 
 
     async def update(self, x:Inbound, who:'Stream'=None):
@@ -184,33 +205,28 @@ class Stream[Inbound, Outbound]:
         return [(stream.id, self.id, self._vis_edge_props) for stream in self.upstream]
         
 
-    if TYPE_CHECKING:
-        def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Sink': ...
-        def map[Inbound, Outbound](self, fn:Callable[[Inbound], Outbound], *args, **kwargs) -> 'Map': ...
-        def zip(self, 
-                require:'Stream'|Iterable['Stream']|None=None, 
-                wait_for_all:bool=True, 
-                purge_on_partial:bool=False, 
-                window:timedelta=timedelta(seconds=0), 
-                *args, 
-                **kwargs) -> 'Zip': ...
-        def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Filter': ...
-        def window(self, window_size:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Window': ...
-        def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Unpack': ...
-        def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'WaitTillDone': ...
+    def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Stream': ...
+    def map[Inbound, Outbound](self, fn:Callable[[Inbound], Outbound], *args, **kwargs) -> 'Stream': ...
+    def zip(self, 
+            require:'Stream'|Iterable['Stream']|None=None, 
+            wait_for_all:bool=True, 
+            purge_on_partial:bool=False, 
+            window:timedelta=timedelta(seconds=0), 
+            *args, 
+            **kwargs) -> 'Stream': ...
+    def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Stream': ...
+    def window(self, n:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Stream': ...
+    def timed_window(self, t:timedelta|float=0, *args, **kwargs) -> 'Stream': ...
+    def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Stream': ...
+    def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'Stream': ...
 
 
 class Source[T](Stream[None, T]):
-    def __init__(self):
-        super().__init__(None, None)
-        self.event_loop = None
+    def __init__(self, event_loop=LOOP, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.event_loop = event_loop
         self._vis_node_props['color'] = 'white'
         self._vis_node_props['size'] = 15
-
-
-    def emit(self, x:T):
-        uv.run(self(x))
-
 
 
 @register_stream()
@@ -344,31 +360,61 @@ class Window[T](Stream[T, Iterable[T]]):
     def __init__(
             self, 
             upstream:Stream|None=None, 
-            window_size:int=1, 
+            n:int=1, 
             emit_partial=True, 
             *args, 
             **kwargs):
         
         super().__init__(upstream, *args, **kwargs)
-        self.window_size = window_size
+        self.n = n
         self.emit_partial = emit_partial
         self._buffer = []
 
 
     async def __call__(self, x:Iterable[T]):
-        return await super().__call__(x)
+        await super().__call__(x)
 
 
     async def update(self, x:T, who:Stream=None):
-        if len(self._buffer) > self.window_size:
+        if len(self._buffer) > self.n:
             self._buffer.pop(0)
         
         self._buffer.append(x)
 
-        if self.emit_partial or len(self._buffer) == self.window_size:
+        if self.emit_partial or len(self._buffer) == self.n:
             await self(self._buffer)
 
+
+@register_stream()
+class TimedWindow[T](Stream):
+
+    def __init__(
+            self, 
+            upstream:Stream=None, 
+            t:timedelta|float=0.0, 
+            *args, 
+            **kwargs):
         
+        super().__init__(upstream, *args, **kwargs)
+
+        if isinstance(t, timedelta):
+            t = t.total_seconds()
+        self.t = t
+        self._time_buffer:list[datetime] = []
+        self._buffer:list[T] = []
+
+    async def __call__(self, x:Iterable[T]):
+        await super().__call__(x)
+
+    async def update(self, x:T, who:Stream=None):
+        while len(self._buffer) > 0 and (datetime.now() - self._time_buffer[0]).total_seconds() > self.t:
+            self._time_buffer.pop(0)
+            self._buffer.pop(0)
+        self._time_buffer.append(datetime.now())
+        self._buffer.append(x)
+        await self(self._buffer)
+        
+
 @register_stream()
 class Unpack[T](Stream[Iterable[T], T]):
 
@@ -393,6 +439,7 @@ class Unpack[T](Stream[Iterable[T], T]):
         
         for item in x:
             await super().update(item, who)
+
 
 @register_stream()
 class WaitTillDone[T](Stream[T, T]):
@@ -483,34 +530,33 @@ class Pipeline[Inbound]:
 
 
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
 
-    def pass_print(x):
-        print(x)
-        return x
+#     def pass_print(x):
+#         print(x)
+#         return x
 
-    async def wait(x, time:float):
-        await asyncio.sleep(time)
-        return x
+#     async def wait(x, time:float):
+#         await asyncio.sleep(time)
+#         return x
 
+#     source = Source()
+#     node = Filter[float](Stream(source, wait, time=0.1), lambda x: True)
+#     delay1 = Stream(node, wait, time=0.25)
+#     delay2 = Stream(node, wait, time=0.1)
+#     w:Stream = WaitTillDone(node, [delay1, delay2])
+#     w.sink(print)
+#     w.map(lambda x: x * 2).add_downstream(node)
 
-    source = Source()
-    source.sink(lambda x: print('hi'))
-    # node = Filter[float](Stream(source, wait, time=0.25), lambda x: x % 2)
-    # delay1 = Stream(node, wait, time=0.25)
-    # delay2 = Stream(node, wait, time=1.0)
-    # Sink(delay1, print)
-    # Sink(delay2, print)
-    # w = WaitTillDone(node, [delay1, delay2])
-    # sink = Sink(w, lambda x: print(f"{x} done!"))
-
-    pipeline = Pipeline(source) 
-    # pipeline.visualize_gv(
-    #     edge_curvature=0.1, 
-    #     use_many_body_force=True,
-    #     many_body_force_strength=-200,
-    #     links_force_distance=125,
-    # ).export_html('_.html', overwrite=True)
-    _ = [source.emit(v) for v in [1, 2, 3, 4, 5]] 
+#     pipeline = Pipeline(source) 
+#     pipeline.visualize_gv(
+#         edge_curvature=0.1, 
+#         use_many_body_force=True,
+#         many_body_force_strength=-200,
+#         links_force_distance=125,
+#     ).export_html('_.html', overwrite=True)
+#     _ = [source.emit(v) for v in [1, 2, 3, 4, 5]] 
+#     while LOOP.is_running():
+#         continue
     
     
