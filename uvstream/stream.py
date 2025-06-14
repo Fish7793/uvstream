@@ -5,9 +5,16 @@ from typing import Callable, Iterable, Literal, Coroutine, Type, Optional
 from collections import OrderedDict
 import uuid
 import re
-import uvloop as uv
 import asyncio 
-asyncio.set_event_loop_policy(uv.EventLoopPolicy())
+import warnings
+
+from importlib.util import find_spec
+
+if find_spec('uvloop'):
+    import uvloop as uv
+    asyncio.set_event_loop_policy(uv.EventLoopPolicy())
+else:
+    warnings.warn('uvloop not found! asyncio event policy not set.')
 
 
 import threading
@@ -206,7 +213,7 @@ class Stream[Inbound, Outbound]:
         
 
     def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Stream': ...
-    def map[Inbound, Outbound](self, fn:Callable[[Inbound], Outbound], *args, **kwargs) -> 'Stream': ...
+    def map[I, O](self, fn:Callable[[I], O], *args, **kwargs) -> 'Stream': ...
     def zip(self, 
             require:Optional['Stream'|Iterable['Stream']]=None, 
             wait_for_all:bool=True, 
