@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime
 import inspect
 from functools import wraps, partial 
-from typing import Callable, Iterable, Literal, Coroutine, Type
+from typing import Callable, Iterable, Literal, Coroutine, Type, Optional
 from collections import OrderedDict
 import uuid
 import re
@@ -74,9 +74,9 @@ def register_stream(name:str=None):
 class Stream[Inbound, Outbound]:
 
     def __init__(self, 
-                 upstream:'Stream|Iterable[Stream]|None'=None, 
-                 fn:Callable[[Inbound], Outbound]|None=None,
-                 name:str|None=None,
+                 upstream:'Optional[Stream|Iterable[Stream]]'=None, 
+                 fn:Optional[Callable[[Inbound], Outbound]]=None,
+                 name:Optional[str]=None,
                  *args,
                  **kwargs):
         self.id = str(uuid.uuid4())
@@ -208,7 +208,7 @@ class Stream[Inbound, Outbound]:
     def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Stream': ...
     def map[Inbound, Outbound](self, fn:Callable[[Inbound], Outbound], *args, **kwargs) -> 'Stream': ...
     def zip(self, 
-            require:'Stream'|Iterable['Stream']|None=None, 
+            require:Optional['Stream'|Iterable['Stream']]=None, 
             wait_for_all:bool=True, 
             purge_on_partial:bool=False, 
             window:timedelta=timedelta(seconds=0), 
@@ -232,8 +232,8 @@ class Source[T](Stream[None, T]):
 @register_stream()
 class Sink[T](Stream[T, None]):
     def __init__(self, 
-                 upstream:Stream|None=None, 
-                 fn:Callable[[T], None]|None=None,
+                 upstream:Optional[Stream]=None, 
+                 fn:Optional[Callable[[T], None]]=None,
                  *args,
                  **kwargs):
         
@@ -263,14 +263,14 @@ class Zip[T](Stream[T, tuple[T]]):
 
     def __init__(self, 
                 upstream:Stream|Iterable[Stream], 
-                require:Stream|Iterable[Stream]|None=None, 
+                require:Optional[Stream|Iterable[Stream]]=None, 
                 wait_for_all:bool=True,
                 purge_on_partial:bool=False,
                 window:timedelta=timedelta(seconds=0),
                 *args,
                 **kwargs):
         
-        self._buffer:OrderedDict[Stream, T|None] = OrderedDict()
+        self._buffer:OrderedDict[Stream, Optional[T]] = OrderedDict()
         self._track:dict[Stream, bool] = dict()
 
         if isinstance(require, Stream):
@@ -331,8 +331,8 @@ class Zip[T](Stream[T, tuple[T]]):
 class Filter[T](Stream):
 
     def __init__(self, 
-                 upstream:Stream|None=None, 
-                 fn:Callable[[T], bool]|None=None, 
+                 upstream:Optional[Stream]=None, 
+                 fn:Optional[Callable[[T], bool]]=None, 
                  *args, 
                  **kwargs):
         
@@ -359,7 +359,7 @@ class Window[T](Stream[T, Iterable[T]]):
 
     def __init__(
             self, 
-            upstream:Stream|None=None, 
+            upstream:Optional[Stream]=None, 
             n:int=1, 
             emit_partial=True, 
             *args, 
