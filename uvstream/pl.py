@@ -13,7 +13,7 @@ PLPredicate = IntoExprColumn | Iterable[IntoExprColumn] | bool | list[bool] | An
 
 class PLStream(Stream[pl.DataFrame, pl.DataFrame]):
 
-    def __init__(self, upstream = None, fn = None, name = None, *args, **kwargs):
+    def __init__(self, upstream:Stream=None, fn:Optional[Callable[[pl.DataFrame], pl.DataFrame]]=None, name:str=None, *args, **kwargs):
         super().__init__(upstream, fn, name, *args, **kwargs)
 
     def pl_filter(self, *predicates:PLPredicate, name=None, **constraints:Any) -> 'PLStream':
@@ -41,8 +41,9 @@ class PLFuncWindow(PLStream):
         self.on_append = Event[Any, None]()
 
     def _update_buffer(self, x:pl.DataFrame, *predicates:PLPredicate, **constraints:Any):
-        if x is None and self._buffer is not None:
-            self._buffer = self._buffer.filter(*predicates, **constraints)
+        if x is None:
+            if self._buffer is not None:
+                self._buffer = self._buffer.filter(*predicates, **constraints)
             return
 
         if self._buffer is not None:
@@ -59,43 +60,27 @@ class PLFuncWindow(PLStream):
 
 @register_stream(PLStream)
 class PLTimeWindow(PLFuncWindow):
-
     def __init__(self, 
                  upstream=None, 
                  t:timedelta|float=float('inf'), 
-                 max_t:timedelta|float=float('inf'),
-                 min_t:timedelta|float=0,
                  time_column:IntoExprColumn=pl.col('ts'), 
+                 realtime:bool=False,
                  *args, 
                  **kwargs):
         super().__init__(upstream, *args, **kwargs)
+
         if isinstance(t, timedelta):
             t = t.total_seconds()
-        if isinstance(max_t, timedelta):
-            max_t = max_t.total_seconds()
-        if isinstance(min_t, timedelta):
-            min_t = min_t.total_seconds()
         self.t = t
-        self.max_t = max_t
-        self.min_t = min_t
+        if isinstance(time_column, str):
+            time_column = pl.col(time_column)
         self.time_column = time_column
-        self._last_emit_time = datetime.now()
-        self._update_loop_interval = 0.1
-        
-        async def update_loop():
-            while True:
-                await asyncio.sleep(self._update_loop_interval)
-                self._update_buffer(None, ((pl.lit(datetime.now()) - self.time_column).dt.total_seconds()) < self.t)
-                if (datetime.now() - self._last_emit_time).total_seconds() > self.min_t
-                    self._last_emit_time = datetime.now()
-                    await self(self._buffer)
-
-        self._update_loop_task = asyncio.create_task(update_loop())
+        self.realtime = realtime
 
 
     async def update(self, x:pl.DataFrame, who:PLStream):
-        if (x.select(self.time_column).max() - self._buffer.select(self.time_column).max()).total_seconds() > self.max_t:
-            self._buffer = None
-        self._update_buffer(x, ((pl.lit(datetime.now()) - self.time_column).dt.total_seconds()) < self.t)
-        self._last_emit_time = datetime.now()
+        if self.realtime:
+            self._update_buffer(x, ((pl.lit(datetime.now()) - self.time_column).dt.total_seconds()) < self.t)
+        else:
+            self._update_buffer(x, ((self.time_column.max() - self.time_column).dt.total_seconds()) < self.t)
         await self(self._buffer)
