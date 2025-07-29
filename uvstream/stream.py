@@ -64,9 +64,8 @@ class Event[Inbound, Outbound]:
     
 snake_case_regex = re.compile('((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))')
 
-def register_stream(base_cls:Type, name:str=None):
+def register_stream(base_cls:Type, name:str=None) -> Callable[[Type, Optional[str]], Type]:
     def decorator(cls:Type) -> Type:
-        @wraps(cls.__init__)
         def wrapper(self:Stream, *args, **kwargs) -> Stream:
             instance = cls(self, *args, **kwargs)
             return instance
@@ -400,6 +399,21 @@ class Window[T](Stream[T, Iterable[T]]):
 
         if self.emit_partial or len(self._buffer) == self.n:
             await self(self._buffer)
+
+
+@register_stream(Stream)
+class Collect(Stream):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.buffer = []
+
+    async def update(self, x, who = None):
+        self.buffer.append(x)
+    
+    def flush(self):
+        buffer = self.buffer
+        self.buffer = []
+        self.event_loop.create_task(self(buffer))
 
 
 @register_stream(Stream)
