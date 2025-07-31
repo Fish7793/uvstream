@@ -233,6 +233,7 @@ class Stream[Inbound, Outbound]:
     def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Stream': ...
     def window(self, n:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Stream': ...
     def timed_window(self, t:timedelta|float=0, *args, **kwargs) -> 'Stream': ...
+    def emit_every(self, t:timedelta|float=0, *args, **kwargs) -> 'Stream': ...
     def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Stream': ...
     def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'Stream': ...
 
@@ -444,7 +445,42 @@ class TimedWindow[T](Stream):
         self._time_buffer.append(datetime.now())
         self._buffer.append(x)
         await self(self._buffer)
+
+@register_stream(Stream)
+class EmitEvery[T](Stream):
+
+    def __init__(
+            self, 
+            upstream:Stream=None, 
+            t:timedelta|float=0.0, 
+            *args, 
+            **kwargs):
         
+        super().__init__(upstream, *args, **kwargs)
+        if isinstance(t, timedelta):
+            t = t.total_seconds()
+        self.t = t
+        self._buffer:list[T] = []
+        self._last_time:datetime = datetime.now()
+
+        async def update_loop():
+            while(True):
+                if len(self._buffer) == 0:
+                    await asyncio.sleep(0)
+                    continue
+                to_emit = self._buffer
+                self._buffer = []
+                await self(to_emit)
+                await asyncio.sleep(self.t)
+
+        self.update_task = asyncio.create_task(update_loop())
+
+    async def __call__(self, x:Iterable[T]):
+        await super().__call__(x)
+
+    async def update(self, x:T, who:Stream=None):
+        self._buffer.append(x)
+
 
 @register_stream(Stream)
 class Unpack[T](Stream[Iterable[T], T]):
