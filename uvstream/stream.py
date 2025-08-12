@@ -10,11 +10,11 @@ import warnings
 
 from importlib.util import find_spec
 
-if find_spec('uvloop'):
-    import uvloop as uv
-    asyncio.set_event_loop_policy(uv.EventLoopPolicy())
-else:
-    warnings.warn('uvloop not found! asyncio event policy not set.')
+# if find_spec('uvloop'):
+#     import uvloop as uv
+#     asyncio.set_event_loop_policy(uv.EventLoopPolicy())
+# else:
+#     warnings.warn('uvloop not found! asyncio event policy not set.')
 
 
 import threading
@@ -156,15 +156,20 @@ class Stream[Inbound, Outbound]:
             try:
                 task.result()
             except asyncio.CancelledError:
-                pass
-            except ExceptionGroup:
-                pass
+                pass          
             except Exception as e:
+                while isinstance(e, ExceptionGroup):
+                    e = e.exceptions[0]
                 raise e
             
-        async with asyncio.TaskGroup() as group:
-            for i in self.downstream:
-                group.create_task(i.update(x, who=self)).add_done_callback(_handle_task_result)
+        try:
+            async with asyncio.TaskGroup() as group:
+                for i in self.downstream:
+                    group.create_task(i.update(x, who=self)).add_done_callback(_handle_task_result)
+        except Exception as e:
+            while isinstance(e, ExceptionGroup):
+                e = e.exceptions[0]
+            raise e
         
         self.on_done()
 
@@ -617,7 +622,7 @@ if __name__ == '__main__':
     w:Stream = WaitTillDone(node, [delay1, delay2])
     w.sink(print)
     w.map(lambda x: x - 1).add_downstream(node)
-    w.map(lambda x: 1 / x).sink(print)
+    w.map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: 1 / x).sink(print)
 
     pipeline = Pipeline(source) 
     pipeline.visualize_gv(
@@ -626,7 +631,7 @@ if __name__ == '__main__':
         many_body_force_strength=-200,
         links_force_distance=125,
     ).export_html('_.html', overwrite=True)
-    _ = [source.emit(v) for v in [16]] 
+    _ = [source.emit(v) for v in [1]] 
     while LOOP.is_running():
         continue
     
