@@ -157,12 +157,15 @@ class Stream[Inbound, Outbound]:
                 task.result()
             except asyncio.CancelledError:
                 pass
+            except ExceptionGroup:
+                pass
             except Exception as e:
                 raise e
-
+            
         async with asyncio.TaskGroup() as group:
             for i in self.downstream:
                 group.create_task(i.update(x, who=self)).add_done_callback(_handle_task_result)
+        
         self.on_done()
 
 
@@ -221,21 +224,21 @@ class Stream[Inbound, Outbound]:
         return [(stream.id, self.id, self._vis_edge_props) for stream in self.upstream]
         
 
-    def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Stream': ...
-    def map[I, O](self, fn:Callable[[I], O], *args, **kwargs) -> 'Stream': ...
+    def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Sink[T]': ...
+    def map[I, O](self, fn:Callable[[I], O], *args, **kwargs) -> 'Map[I, O]': ...
     def zip(self, 
             require:Optional['Stream'|Iterable['Stream']]=None, 
             wait_for_all:bool=True, 
             purge_on_partial:bool=False, 
             window:timedelta=timedelta(seconds=0), 
             *args, 
-            **kwargs) -> 'Stream': ...
-    def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Stream': ...
-    def window(self, n:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Stream': ...
-    def timed_window(self, t:timedelta|float=0, *args, **kwargs) -> 'Stream': ...
-    def emit_every(self, t:timedelta|float=0, *args, **kwargs) -> 'Stream': ...
-    def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Stream': ...
-    def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'Stream': ...
+            **kwargs) -> 'Zip': ...
+    def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Filter[T]': ...
+    def window(self, n:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Window': ...
+    def timed_window(self, t:timedelta|float=0, *args, **kwargs) -> 'TimedWindow': ...
+    def emit_every(self, t:timedelta|float=0, *args, **kwargs) -> 'EmitEvery': ...
+    def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Unpack[T]': ...
+    def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'WaitTillDone': ...
 
 
 class Source[T](Stream[None, T]):
@@ -608,12 +611,13 @@ if __name__ == '__main__':
         return x
 
     source = Source()
-    node = Filter[float](Stream(source, wait, time=0.1), lambda x: True)
+    node = Filter[float](Stream(source.map(lambda x: x), wait, time=0.1), lambda x: True)
     delay1 = Stream(node, wait, time=0.25)
     delay2 = Stream(node, wait, time=0.1)
     w:Stream = WaitTillDone(node, [delay1, delay2])
     w.sink(print)
-    w.map(lambda x: x * 2).add_downstream(node)
+    w.map(lambda x: x - 1).add_downstream(node)
+    w.map(lambda x: 1 / x).sink(print)
 
     pipeline = Pipeline(source) 
     pipeline.visualize_gv(
@@ -622,7 +626,7 @@ if __name__ == '__main__':
         many_body_force_strength=-200,
         links_force_distance=125,
     ).export_html('_.html', overwrite=True)
-    _ = [source.emit(v) for v in [1, 2, 3, 4, 5]] 
+    _ = [source.emit(v) for v in [16]] 
     while LOOP.is_running():
         continue
     
