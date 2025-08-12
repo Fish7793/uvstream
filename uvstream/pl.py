@@ -6,7 +6,7 @@ if not find_spec('polars'):
     raise ModuleNotFoundError(name='polars')
 
 import polars as pl
-from polars._typing import IntoExprColumn
+from polars._typing import IntoExprColumn, IntoExpr
 from uvstream.stream import *
 
 PLPredicate = IntoExprColumn | Iterable[IntoExprColumn] | bool | list[bool] | Any
@@ -30,6 +30,29 @@ class PLStream(Stream[pl.DataFrame, pl.DataFrame]):
     
     def pl_insert_column(self, index:int, column:IntoExprColumn, name=None) -> 'PLStream':
         return PLStream(self, lambda x: x.insert_column(index, column), name=name)
+
+
+class PLMapBy(PLStream):
+
+    def __init__(self, upstream:Stream=None, by:IntoExpr|Iterable[IntoExpr]=None, fn:Optional[Callable[[pl.DataFrame], pl.DataFrame]]=None, name:str=None, *args, **kwargs):
+        super().__init__(upstream, fn, name, *args, **kwargs)
+        self.by = by
+
+    async def update(self, x:pl.DataFrame, who = None):
+        return await self(x.group_by(self.by).map_groups(self.fn))
+
+
+class PLAggBy(PLStream):
+
+    def __init__(self, upstream:Stream=None, by:IntoExpr|Iterable[IntoExpr]=None, agg:IntoExpr|Iterable[IntoExpr]=None, name:str=None, *args, **kwargs):
+        super().__init__(upstream, name, *args, **kwargs)
+        self.by = by
+        self.agg = agg
+
+    async def update(self, x:pl.DataFrame, who = None):
+        if isinstance(self.agg, dict): 
+            return await self(x.group_by(self.by).agg(**self.agg))
+        return await self(x.group_by(self.by).agg(self.agg))
 
 
 class PLFuncWindow(PLStream):
@@ -84,3 +107,40 @@ class PLTimeWindow(PLFuncWindow):
         else:
             self._update_buffer(x, ((self.time_column.max() - self.time_column).dt.total_seconds()) < self.t)
         await self(self._buffer)
+
+
+@register_stream(PLStream)
+class PLConcat(PLStream):
+    def __init__(self, upstream=None, how='diagonal_relaxed', *args, **kwargs):
+        super().__init__(upstream, *args, **kwargs)
+        self.how=how
+ 
+
+    async def update(self, x:Iterable[pl.DataFrame], who:PLStream):
+        await self(pl.concat(x, how=self.how))
+
+
+def pl_concat(*args:PLStream, how='diagonal_relaxed', **kwargs):
+    return PLConcat(Zip(args, **kwargs), how=how)
+
+
+@register_stream(PLStream)
+class PLJoin(PLStream):
+    def __init__(self, upstream=None, on=None, how='full', *args, **kwargs):
+        super().__init__(upstream, *args, **kwargs)
+        self.on = on
+        self.how = how
+
+
+    async def update(self, x:Iterable[pl.DataFrame], who:PLStream):
+        x0:pl.DataFrame = x[0]
+        for xi in x[1:]:
+            x0 = x0.join(xi, on=self.on, how=self.how)
+            for col in x0.columns:
+                if col.endswith('_right'):
+                    x0 = x0.drop(col)
+        await self(x0)
+
+
+def pl_join(*args:PLStream, on=None, how='full', **kwargs):
+    return PLJoin(Zip(args, **kwargs), on=on, how=how)
