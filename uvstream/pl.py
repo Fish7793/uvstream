@@ -117,6 +117,7 @@ class PLConcat(PLStream):
  
 
     async def update(self, x:Iterable[pl.DataFrame], who:PLStream):
+        x = list(filter(lambda x: x is not None, x))
         await self(pl.concat(x, how=self.how))
 
 
@@ -135,6 +136,8 @@ class PLJoin(PLStream):
     async def update(self, x:Iterable[pl.DataFrame], who:PLStream):
         x0:pl.DataFrame = x[0]
         for xi in x[1:]:
+            if xi is None:
+                continue
             x0 = x0.join(xi, on=self.on, how=self.how)
             for col in x0.columns:
                 if col.endswith('_right'):
