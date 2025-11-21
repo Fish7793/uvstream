@@ -7,20 +7,23 @@ import uuid
 import re
 import asyncio 
 import warnings
-
 from importlib.util import find_spec
 
-# if find_spec('uvloop'):
-#     import uvloop as uv
-#     asyncio.set_event_loop_policy(uv.EventLoopPolicy())
-# else:
-#     warnings.warn('uvloop not found! asyncio event policy not set.')
 
+def setup_uv_loop():
+    if find_spec('uvloop'):
+        import uvloop as uv
+        asyncio.set_event_loop_policy(uv.EventLoopPolicy())
+    else:
+        warnings.warn('uvloop not found! asyncio event policy not set.')
 
-import threading
-LOOP = asyncio.new_event_loop()
-LOOP_THREAD = threading.Thread(target=LOOP.run_forever, daemon=True)
-LOOP_THREAD.start()
+setup_uv_loop()
+
+try:
+    LOOP = asyncio.get_event_loop()
+except:
+    LOOP = asyncio.new_event_loop()
+    asyncio.set_event_loop(LOOP)
 
 
 class Event[Inbound, Outbound]:
@@ -86,7 +89,7 @@ class Stream[Inbound, Outbound]:
                  event_loop:asyncio.AbstractEventLoop=LOOP,
                  *args,
                  **kwargs):
-        self.id = str(uuid.uuid4())
+        self.id = kwargs.pop('id', str(uuid.uuid4()))
         self.upstream:set['Stream'] = set()
         self.downstream:set['Stream'] = set()
         self.on_done:Event[None, None] = Event()
@@ -401,7 +404,7 @@ class Window[T](Stream[T, Iterable[T]]):
 
 
     async def update(self, x:T, who:Stream=None):
-        if len(self._buffer) > self.n:
+        if len(self._buffer) > self.n - 1:
             self._buffer.pop(0)
         
         self._buffer.append(x)
@@ -412,8 +415,8 @@ class Window[T](Stream[T, Iterable[T]]):
 
 @register_stream(Stream)
 class Collect(Stream):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, upstream=None, *args, **kwargs):
+        super().__init__(upstream=upstream, *args, **kwargs)
         self.buffer = []
 
     async def update(self, x, who = None):
@@ -481,7 +484,7 @@ class EmitEvery[T](Stream):
                 await self(to_emit)
                 await asyncio.sleep(self.t)
 
-        self.update_task = asyncio.create_task(update_loop())
+        self.update_task = self.event_loop.create_task(update_loop())
 
     async def __call__(self, x:Iterable[T]):
         await super().__call__(x)
@@ -540,7 +543,7 @@ class Pipeline[Inbound]:
 
     def __init__(self, source:Source[Inbound], *streams:Stream):
         self.source:Source[Inbound] = source
-        self.streams:set[Stream] = set([source, *self._traverse(source, 'down'), *streams])
+        self.streams:set[Stream] = set([source, *self._traverse(source, 'bi'), *streams])
 
 
     def __call__(self, x:Inbound):
@@ -583,8 +586,10 @@ class Pipeline[Inbound]:
         nodes = []
         edges = []
         for stream in self.streams:
-            nodes.append((stream.id, dict(id=stream.id, name=str(stream), **stream._vis_node_props)))
-            edges.extend(stream._edge_tuples())
+            nodes.append((stream.id, dict(id=stream.id, name=f"{stream}(id={stream.id})", **stream._vis_node_props)))
+            edge_tuples = stream._edge_tuples()
+            if len(edge_tuples) > 0:
+                edges.extend(edge_tuples)
         
         G.add_nodes_from(nodes)
         G.add_edges_from(edges)
@@ -602,37 +607,5 @@ class Pipeline[Inbound]:
 
     def __str__(self):
         return '\n'.join([f"{idx}: {str(stream)}" for idx, stream in enumerate(self._traverse(self.source, 'down'))])
-
-
-
-if __name__ == '__main__':
-
-    def pass_print(x):
-        print(x)
-        return x
-
-    async def wait(x, time:float):
-        await asyncio.sleep(time)
-        return x
-
-    source = Source()
-    node = Filter[float](Stream(source.map(lambda x: x), wait, time=0.1), lambda x: True)
-    delay1 = Stream(node, wait, time=0.25)
-    delay2 = Stream(node, wait, time=0.1)
-    w:Stream = WaitTillDone(node, [delay1, delay2])
-    w.sink(print)
-    w.map(lambda x: x - 1).add_downstream(node)
-    w.map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: x).map(lambda x: 1 / x).sink(print)
-
-    pipeline = Pipeline(source) 
-    pipeline.visualize_gv(
-        edge_curvature=0.1, 
-        use_many_body_force=True,
-        many_body_force_strength=-200,
-        links_force_distance=125,
-    ).export_html('_.html', overwrite=True)
-    _ = [source.emit(v) for v in [1]] 
-    while LOOP.is_running():
-        continue
     
     
