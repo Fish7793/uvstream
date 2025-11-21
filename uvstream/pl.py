@@ -8,6 +8,7 @@ if not find_spec('polars'):
 import polars as pl
 from polars._typing import IntoExprColumn, IntoExpr
 from uvstream.stream import *
+import math
 
 PLPredicate = IntoExprColumn | Iterable[IntoExprColumn] | bool | list[bool] | Any
 
@@ -30,6 +31,16 @@ class PLStream(Stream[pl.DataFrame, pl.DataFrame]):
     
     def pl_insert_column(self, index:int, column:IntoExprColumn, name=None) -> 'PLStream':
         return PLStream(self, lambda x: x.insert_column(index, column), name=name)
+    
+    def first(self) -> 'PLStream':
+        return pl_first(self)
+    
+    def last(self) -> 'PLStream':
+        return pl_last(self)
+
+    def remap(self, drop=[], **map) -> 'PLStream':
+        return pl_remap(self, *drop, **map)
+
 
 
 class PLMapBy(PLStream):
@@ -63,21 +74,21 @@ class PLFuncWindow(PLStream):
         self.unique_col = unique_col
         self.on_append = Event[Any, None]()
 
-    def _update_buffer(self, x:pl.DataFrame, *predicates:PLPredicate, **constraints:Any):
+    def _update_buffer(self, x:pl.DataFrame, *predicates:PLPredicate, skip_filters=False, **constraints:Any):
         if x is None:
-            if self._buffer is not None:
+            if self._buffer is not None and not skip_filters:
                 self._buffer = self._buffer.filter(*predicates, **constraints)
             return
 
         if self._buffer is not None:
-            if self.unique_col is not None:
+            if self.unique_col is not None and not skip_filters:
                 x = x.filter(self.unique_col.is_in(self._buffer.select(self.unique_col).to_series()).not_())
             self._buffer = self._buffer.vstack(x)
         else:
             self._buffer = x.clone()
 
         self.on_append(self._buffer, x)
-        if len(self._buffer) > self.min_samples:
+        if len(self._buffer) > self.min_samples and not skip_filters:
             self._buffer = self._buffer.filter(*predicates, **constraints)
 
 
@@ -107,6 +118,41 @@ class PLTimeWindow(PLFuncWindow):
         else:
             self._update_buffer(x, ((self.time_column.max() - self.time_column).dt.total_seconds()) < self.t)
         await self(self._buffer)
+
+
+@register_stream(PLStream)
+class PLEmitEvery(PLFuncWindow):
+    def __init__(self, 
+                 upstream=None, 
+                 t:timedelta|float=float('inf'), 
+                 time_column:IntoExprColumn=pl.col('ts'), 
+                 round_to:timedelta=timedelta(seconds=1),
+                 *args, 
+                 **kwargs):
+        super().__init__(upstream, *args, **kwargs)
+
+        if isinstance(t, timedelta):
+            t = t.total_seconds()
+        self.t = t
+        if isinstance(time_column, str):
+            time_column = pl.col(time_column)
+        self.time_column = time_column
+        self.round_to:timedelta = round_to
+
+
+    async def update(self, x:pl.DataFrame, who:PLStream):
+        if self._buffer is not None:
+            first:datetime = self._buffer.select(self.time_column.first()).item()
+            first = datetime.fromtimestamp(math.floor(first.timestamp() / self.round_to.total_seconds()) * self.round_to.total_seconds())
+            last:datetime = x.select(self.time_column.last()).item()
+            last = datetime.fromtimestamp(math.floor(last.timestamp() / self.round_to.total_seconds()) * self.round_to.total_seconds())
+
+            if (last - first).total_seconds() >= self.t:
+                await self(self._buffer)
+                self._buffer = self._buffer.clear()
+        
+        self._update_buffer(x, skip_filters=True)
+
 
 
 @register_stream(PLStream)
@@ -147,3 +193,15 @@ class PLJoin(PLStream):
 
 def pl_join(*args:PLStream, on=None, how='full', **kwargs):
     return PLJoin(Zip(args, **kwargs), on=on, how=how)
+
+
+def pl_last(upstream:PLStream):
+    return upstream.pl_map(lambda x: x.select(pl.last(*x.columns)))
+
+
+def pl_first(upstream:PLStream):
+    return upstream.pl_map(lambda x: x.select(pl.first(*x.columns)))
+
+
+def pl_remap(upstream:PLStream, *drop, **map):
+    return upstream.pl_map(lambda x: x.with_columns(**map).drop(*drop, strict=False))
