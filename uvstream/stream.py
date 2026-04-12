@@ -65,7 +65,7 @@ class Event[Inbound, Outbound]:
         return self.awaited_args.pop(id)
 
     
-snake_case_regex = re.compile('((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))')
+__SNAKE_CASE_REGEX = re.compile('((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))')
 
 def register_stream(base_cls:Type, name:str=None) -> Callable[[Type, Optional[str]], Type]:
     def decorator(cls:Type) -> Type:
@@ -75,7 +75,7 @@ def register_stream(base_cls:Type, name:str=None) -> Callable[[Type, Optional[st
         if name:
             setattr(base_cls, name, wrapper)
         else:
-            setattr(base_cls, snake_case_regex.sub(r'_\1', cls.__name__).lower(), wrapper)
+            setattr(base_cls, __SNAKE_CASE_REGEX.sub(r'_\1', cls.__name__).lower(), wrapper)
         return cls
     return decorator
 
@@ -118,6 +118,17 @@ class Stream[Inbound, Outbound]:
             'border_color':'black',
         }
         self._vis_edge_props = dict()
+
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('event_loop')
+        return state
+
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.event_loop = LOOP
 
 
     def add_upstream(self, other:'Stream'):
@@ -178,7 +189,7 @@ class Stream[Inbound, Outbound]:
 
 
     def emit(self, x:Outbound):
-        asyncio.run_coroutine_threadsafe(self(x), self.event_loop)
+        return asyncio.run_coroutine_threadsafe(self(x), self.event_loop)
 
 
     async def update(self, x:Inbound, who:'Stream'=None):

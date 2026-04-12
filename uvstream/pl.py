@@ -74,7 +74,7 @@ class PLFuncWindow(PLStream):
         self.unique_col = unique_col
         self.on_append = Event[Any, None]()
 
-    def _update_buffer(self, x:pl.DataFrame, *predicates:PLPredicate, skip_filters=False, **constraints:Any):
+    def _update_buffer(self, x:pl.DataFrame|None, *predicates:PLPredicate, skip_filters=False, **constraints:Any):
         if x is None:
             if self._buffer is not None and not skip_filters:
                 self._buffer = self._buffer.filter(*predicates, **constraints)
@@ -113,11 +113,14 @@ class PLTimeWindow(PLFuncWindow):
 
 
     async def update(self, x:pl.DataFrame, who:PLStream):
+        if self._buffer is not None:
+            self._buffer = self._buffer.sort(self.time_column)
+
         if self.realtime:
             self._update_buffer(x, ((pl.lit(datetime.now()) - self.time_column).dt.total_seconds()) < self.t)
         else:
             self._update_buffer(x, ((self.time_column.max() - self.time_column).dt.total_seconds()) < self.t)
-        await self(self._buffer)
+        await self(self._buffer.clone())
 
 
 @register_stream(PLStream)
@@ -126,7 +129,7 @@ class PLEmitEvery(PLFuncWindow):
                  upstream=None, 
                  t:timedelta|float=float('inf'), 
                  time_column:IntoExprColumn=pl.col('ts'), 
-                 round_to:timedelta=timedelta(seconds=1),
+                 round_to:timedelta=None,
                  *args, 
                  **kwargs):
         super().__init__(upstream, *args, **kwargs)
@@ -143,15 +146,18 @@ class PLEmitEvery(PLFuncWindow):
     async def update(self, x:pl.DataFrame, who:PLStream):
         if self._buffer is not None:
             first:datetime = self._buffer.select(self.time_column.first()).item()
-            first = datetime.fromtimestamp(math.floor(first.timestamp() / self.round_to.total_seconds()) * self.round_to.total_seconds())
             last:datetime = x.select(self.time_column.last()).item()
-            last = datetime.fromtimestamp(math.floor(last.timestamp() / self.round_to.total_seconds()) * self.round_to.total_seconds())
+            if self.round_to is not None:
+                first = datetime.fromtimestamp(math.floor(first.timestamp() / self.round_to.total_seconds()) * self.round_to.total_seconds())
+                last = datetime.fromtimestamp(math.floor(last.timestamp() / self.round_to.total_seconds()) * self.round_to.total_seconds())
 
             if (last - first).total_seconds() >= self.t:
-                await self(self._buffer)
+                await self(self._buffer.clone())
                 self._buffer = self._buffer.clear()
         
-        self._update_buffer(x, skip_filters=True)
+        self._update_buffer(x.clone(), skip_filters=True)
+
+
 
 
 
