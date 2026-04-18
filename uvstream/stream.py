@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime
 import inspect
 from functools import wraps, partial 
-from typing import Callable, Iterable, Literal, Coroutine, Type, Optional
+from typing import Callable, Iterable, Literal, Coroutine, Type, Optional, Any
 from collections import OrderedDict
 import uuid
 import re
@@ -26,31 +26,31 @@ except:
     asyncio.set_event_loop(LOOP)
 
 
-class Event[Inbound, Outbound]:
+class Event:
 
     def __init__(self):
-        self.delegates:set[Callable[[Inbound], Outbound]] = set()
+        self.delegates:set[Callable[[Any], Any]] = set()
         self.awaiting:set[uuid.UUID] = set()
-        self.awaited_args:dict[uuid.UUID, Inbound] = dict()
+        self.awaited_args:dict[uuid.UUID, Any] = dict()
 
 
-    def emit(self, *args:Inbound) -> Iterable[Outbound]:
+    def emit(self, *args:Any) -> Iterable[Any]:
         for id in self.awaiting:
             self.awaited_args[id] = args
         self.awaiting.clear()
         return [delegate(*args) for delegate in self.delegates]
 
 
-    def __call__(self, *args:Inbound) -> Iterable[Outbound]:
+    def __call__(self, *args:Any) -> Iterable[Any]:
         return self.emit(*args)
     
 
-    def __add__(self, other:Callable[[Inbound], Outbound]):
+    def __add__(self, other:Callable[[Any], Any]):
         self.delegates.add(other)
         return self
 
 
-    def __sub__(self, other:Callable[[Inbound], Outbound]):
+    def __sub__(self, other:Callable[[Any], Any]):
         if other in self.delegates:
             self.delegates.remove(other)
         return self
@@ -80,11 +80,11 @@ def register_stream(base_cls:Type, name:str=None) -> Callable[[Type, Optional[st
     return decorator
 
 
-class Stream[Inbound, Outbound]:
+class Stream:
 
     def __init__(self, 
                  upstream:'Optional[Stream|Iterable[Stream]]'=None, 
-                 fn:Optional[Callable[[Inbound], Outbound]]=None,
+                 fn:Optional[Callable[[Any], Any]]=None,
                  name:Optional[str]=None,
                  event_loop:asyncio.AbstractEventLoop=LOOP,
                  *args,
@@ -92,7 +92,7 @@ class Stream[Inbound, Outbound]:
         self.id = kwargs.pop('id', str(uuid.uuid4()))
         self.upstream:set['Stream'] = set()
         self.downstream:set['Stream'] = set()
-        self.on_done:Event[None, None] = Event()
+        self.on_done:Event = Event()
         self.event_loop = event_loop
 
         if upstream is not None:
@@ -164,7 +164,7 @@ class Stream[Inbound, Outbound]:
         self.downstream = set()
 
 
-    async def __call__(self, x:Outbound):
+    async def __call__(self, x:Any):
         
         def _handle_task_result(task:asyncio.Task):
             try:
@@ -188,11 +188,11 @@ class Stream[Inbound, Outbound]:
         self.on_done()
 
 
-    def emit(self, x:Outbound):
+    def emit(self, x:Any):
         return asyncio.run_coroutine_threadsafe(self(x), self.event_loop)
 
 
-    async def update(self, x:Inbound, who:'Stream'=None):
+    async def update(self, x:Any, who:'Stream'=None):
         if self.fn is None:
             await self(x)
             return
@@ -243,8 +243,8 @@ class Stream[Inbound, Outbound]:
         return [(stream.id, self.id, self._vis_edge_props) for stream in self.upstream]
         
 
-    def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Sink[T]': ...
-    def map[I, O](self, fn:Callable[[I], O], *args, **kwargs) -> 'Map[I, O]': ...
+    def sink[T](self, fn:Callable[[T], None], *args, **kwargs) -> 'Sink': ...
+    def map[I, O](self, fn:Callable[[I], O], *args, **kwargs) -> 'Map': ...
     def zip(self, 
             require:Optional['Stream'|Iterable['Stream']]=None, 
             wait_for_all:bool=True, 
@@ -252,15 +252,15 @@ class Stream[Inbound, Outbound]:
             window:timedelta=timedelta(seconds=0), 
             *args, 
             **kwargs) -> 'Zip': ...
-    def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Filter[T]': ...
+    def filter[T](self, fn:Callable[[T], bool], *args, **kwargs) -> 'Filter': ...
     def window(self, n:int=1, emit_partial:bool=True, *args, **kwargs) -> 'Window': ...
     def timed_window(self, t:timedelta|float=0, *args, **kwargs) -> 'TimedWindow': ...
     def emit_every(self, t:timedelta|float=0, *args, **kwargs) -> 'EmitEvery': ...
-    def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Unpack[T]': ...
+    def unpack[T](self, fn:Callable[[T], T], *args, **kwargs) -> 'Unpack': ...
     def wait_till_done(self, require:Iterable['Stream']|'Stream'=None, *args, **kwargs) -> 'WaitTillDone': ...
 
 
-class Source[T](Stream[None, T]):
+class Source(Stream):
     def __init__(self, event_loop=LOOP, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.event_loop = event_loop
@@ -269,10 +269,10 @@ class Source[T](Stream[None, T]):
 
 
 @register_stream(Stream)
-class Sink[T](Stream[T, None]):
+class Sink(Stream):
     def __init__(self, 
                  upstream:Optional[Stream]=None, 
-                 fn:Optional[Callable[[T], None]]=None,
+                 fn:Optional[Callable[[Any], None]]=None,
                  *args,
                  **kwargs):
         
@@ -281,7 +281,7 @@ class Sink[T](Stream[T, None]):
         self._vis_node_props['color'] = 'black'
             
 
-    async def update(self, x:T, who:'Stream'=None):
+    async def update(self, x:Any, who:'Stream'=None):
         if self.fn is None:
             return
         
@@ -293,12 +293,12 @@ class Sink[T](Stream[T, None]):
 
 
 @register_stream(Stream)
-class Map[Inbound, Outbound](Stream[Inbound, Outbound]):
+class Map(Stream):
     pass
 
 
 @register_stream(Stream)
-class Zip[T](Stream[T, tuple[T]]):
+class Zip(Stream):
 
     def __init__(self, 
                 upstream:Stream|Iterable[Stream], 
@@ -309,7 +309,7 @@ class Zip[T](Stream[T, tuple[T]]):
                 *args,
                 **kwargs):
         
-        self._buffer:OrderedDict[Stream, Optional[T]] = OrderedDict()
+        self._buffer:OrderedDict[Stream, Any|None] = OrderedDict()
         self._track:dict[Stream, bool] = dict()
 
         if isinstance(require, Stream):
@@ -322,6 +322,24 @@ class Zip[T](Stream[T, tuple[T]]):
 
         super().__init__(upstream, None, *args, **kwargs)
         self._vis_node_props['shape'] = 'rectangle'
+
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        d = state.pop('_buffer')
+        state['_buffer'] = dict()
+        for k, _ in d.items():
+            state['_buffer'][k] = None
+
+        d = state.pop('_track')
+        state['_track'] = dict()
+        for k, _ in d.items():
+            state['_track'][k] = False
+        return state
+
+
+    def __setstate__(self, state):
+        getattr(super(), '__setstate__', self.__dict__.update)(state)
 
 
     def add_upstream(self, other:'Stream'):
@@ -345,7 +363,7 @@ class Zip[T](Stream[T, tuple[T]]):
         self._buffer.update((k, None) for k in self._buffer.keys())
 
 
-    async def update(self, x:T, who:Stream=None):
+    async def update(self, x:Any, who:Stream=None):
         self._buffer[who] = x
         self._track[who] = True
 
@@ -367,18 +385,18 @@ class Zip[T](Stream[T, tuple[T]]):
 
 
 @register_stream(Stream)
-class Filter[T](Stream):
+class Filter(Stream):
 
     def __init__(self, 
                  upstream:Optional[Stream]=None, 
-                 fn:Optional[Callable[[T], bool]]=None, 
+                 fn:Optional[Callable[[Any], bool]]=None, 
                  *args, 
                  **kwargs):
         
         super().__init__(upstream, fn, *args, **kwargs)
 
 
-    async def update(self, x:T, who:Stream=None):
+    async def update(self, x:Any, who:Stream=None):
         if self.fn is None:
             return
         
@@ -394,11 +412,11 @@ class Filter[T](Stream):
 
 
 @register_stream(Stream)
-class Window[T](Stream[T, Iterable[T]]):
+class Window(Stream):
 
     def __init__(
             self, 
-            upstream:Optional[Stream]=None, 
+            upstream:Stream|None=None, 
             n:int=1, 
             emit_partial=True, 
             *args, 
@@ -410,11 +428,22 @@ class Window[T](Stream[T, Iterable[T]]):
         self._buffer = []
 
 
-    async def __call__(self, x:Iterable[T]):
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.pop('_buffer')
+        return state
+
+
+    def __setstate__(self, state):
+        getattr(super(), '__setstate__', self.__dict__.update)(state)
+        self._buffer = []
+
+
+    async def __call__(self, x:Iterable[Any]):
         await super().__call__(x)
 
 
-    async def update(self, x:T, who:Stream=None):
+    async def update(self, x:Any, who:Stream=None):
         if len(self._buffer) > self.n - 1:
             self._buffer.pop(0)
         
@@ -424,23 +453,38 @@ class Window[T](Stream[T, Iterable[T]]):
             await self(self._buffer)
 
 
+
 @register_stream(Stream)
 class Collect(Stream):
     def __init__(self, upstream=None, *args, **kwargs):
         super().__init__(upstream=upstream, *args, **kwargs)
         self.buffer = []
 
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.pop('buffer')
+        return state
+
+
+    def __setstate__(self, state):
+        getattr(super(), '__setstate__', self.__dict__.update)(state)
+        self.buffer = []
+
+
     async def update(self, x, who = None):
         self.buffer.append(x)
     
+
     def flush(self):
         buffer = self.buffer
         self.buffer = []
         self.event_loop.create_task(self(buffer))
 
 
+
 @register_stream(Stream)
-class TimedWindow[T](Stream):
+class TimedWindow(Stream):
 
     def __init__(
             self, 
@@ -455,12 +499,27 @@ class TimedWindow[T](Stream):
             t = t.total_seconds()
         self.t = t
         self._time_buffer:list[datetime] = []
-        self._buffer:list[T] = []
+        self._buffer:list[Any] = []
 
-    async def __call__(self, x:Iterable[T]):
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.pop('_buffer')
+        state.pop('_time_buffer')
+        return state
+
+
+    def __setstate__(self, state):
+        getattr(super(), '__setstate__', self.__dict__.update)(state)
+        self._buffer = []
+        self._time_buffer = datetime.now()
+
+
+    async def __call__(self, x:Iterable[Any]):
         await super().__call__(x)
 
-    async def update(self, x:T, who:Stream=None):
+
+    async def update(self, x:Any, who:Stream=None):
         while len(self._buffer) > 0 and (datetime.now() - self._time_buffer[0]).total_seconds() > self.t:
             self._time_buffer.pop(0)
             self._buffer.pop(0)
@@ -468,8 +527,10 @@ class TimedWindow[T](Stream):
         self._buffer.append(x)
         await self(self._buffer)
 
+
+
 @register_stream(Stream)
-class EmitEvery[T](Stream):
+class EmitEvery(Stream):
 
     def __init__(
             self, 
@@ -482,7 +543,7 @@ class EmitEvery[T](Stream):
         if isinstance(t, timedelta):
             t = t.total_seconds()
         self.t = t
-        self._buffer:list[T] = []
+        self._buffer:list[Any] = []
         self._last_time:datetime = datetime.now()
 
         async def update_loop():
@@ -497,31 +558,49 @@ class EmitEvery[T](Stream):
 
         self.update_task = self.event_loop.create_task(update_loop())
 
-    async def __call__(self, x:Iterable[T]):
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.pop('_buffer')
+        state.pop('_last_time')
+        state.pop('update_task')
+        return state
+
+
+    def __setstate__(self, state):
+        getattr(super(), '__setstate__', self.__dict__.update)(state)
+        self._buffer = []
+        self._last_time = datetime.now()
+        if self.update_task is not None:
+            self.update_task.cancel()
+        self.update_task = self.event_loop.create_task(update_loop())
+
+
+    async def __call__(self, x:Iterable[Any]):
         await super().__call__(x)
 
-    async def update(self, x:T, who:Stream=None):
+    async def update(self, x:Any, who:Stream=None):
         self._buffer.append(x)
 
 
 @register_stream(Stream)
-class Unpack[T](Stream[Iterable[T], T]):
+class Unpack(Stream):
 
     def __init__(
             self, 
             upstream:Stream=None, 
-            fn:Callable[[T], T]=None, 
+            fn:Callable[[Any], Any]=None, 
             *args, 
             **kwargs):
         
         super().__init__(upstream, fn, *args, **kwargs)
 
     
-    async def __call__(self, x:T):
+    async def __call__(self, x:Any):
         return await super().__call__(x)
     
 
-    async def update(self, x:Iterable[T], who:Stream=None):
+    async def update(self, x:Iterable[Any], who:Stream=None):
         if not isinstance(x, Iterable):
             await super().update(x)
             return 
@@ -531,7 +610,7 @@ class Unpack[T](Stream[Iterable[T], T]):
 
 
 @register_stream(Stream)
-class WaitTillDone[T](Stream[T, T]):
+class WaitTillDone(Stream):
     def __init__(
             self, 
             upstream:Stream=None, 
@@ -545,19 +624,19 @@ class WaitTillDone[T](Stream[T, T]):
         super().__init__(upstream, None, *args, **kwargs)
 
 
-    async def update(self, x:T, who:Stream=None):
+    async def update(self, x:Any, who:Stream=None):
         await asyncio.gather(*[req.on_done.invoked for req in self.require])
         await super().update(x, who)
 
 
-class Pipeline[Inbound]:
+class Pipeline:
 
-    def __init__(self, source:Source[Inbound], *streams:Stream):
-        self.source:Source[Inbound] = source
+    def __init__(self, source:Source, *streams:Stream):
+        self.source:Source = source
         self.streams:set[Stream] = set([source, *self._traverse(source, 'bi'), *streams])
 
 
-    def __call__(self, x:Inbound):
+    def __call__(self, x:Any):
         self.source.emit(x)
 
 

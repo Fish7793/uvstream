@@ -12,9 +12,14 @@ import math
 
 PLPredicate = IntoExprColumn | Iterable[IntoExprColumn] | bool | list[bool] | Any
 
-class PLStream(Stream[pl.DataFrame, pl.DataFrame]):
+class PLStream(Stream):
 
-    def __init__(self, upstream:Stream=None, fn:Optional[Callable[[pl.DataFrame], pl.DataFrame]]=None, name:str=None, *args, **kwargs):
+    def __init__(self, 
+                 upstream:Stream=None, 
+                 fn:Callable[[pl.DataFrame], pl.DataFrame]|None=None, 
+                 name:str=None,
+                 *args, 
+                 **kwargs):
         super().__init__(upstream, fn, name, *args, **kwargs)
 
     def pl_filter(self, *predicates:PLPredicate, name=None, **constraints:Any) -> 'PLStream':
@@ -72,7 +77,19 @@ class PLFuncWindow(PLStream):
         self._buffer:pl.DataFrame = None
         self.min_samples = min_samples
         self.unique_col = unique_col
-        self.on_append = Event[Any, None]()
+        self.on_append = Event()
+
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.pop('_buffer')
+        return state
+
+
+    def __setstate__(self, state):
+        getattr(super(), '__setstate__', self.__dict__.update)(state)
+        self._buffer = None
+
 
     def _update_buffer(self, x:pl.DataFrame|None, *predicates:PLPredicate, skip_filters=False, **constraints:Any):
         if x is None:
@@ -90,6 +107,7 @@ class PLFuncWindow(PLStream):
         self.on_append(self._buffer, x)
         if len(self._buffer) > self.min_samples and not skip_filters:
             self._buffer = self._buffer.filter(*predicates, **constraints)
+
 
 
 @register_stream(PLStream)
@@ -121,6 +139,7 @@ class PLTimeWindow(PLFuncWindow):
         else:
             self._update_buffer(x, ((self.time_column.max() - self.time_column).dt.total_seconds()) < self.t)
         await self(self._buffer.clone())
+
 
 
 @register_stream(PLStream)
@@ -159,8 +178,6 @@ class PLEmitEvery(PLFuncWindow):
 
 
 
-
-
 @register_stream(PLStream)
 class PLConcat(PLStream):
     def __init__(self, upstream=None, how='diagonal_relaxed', *args, **kwargs):
@@ -173,8 +190,10 @@ class PLConcat(PLStream):
         await self(pl.concat(x, how=self.how))
 
 
+
 def pl_concat(*args:PLStream, how='diagonal_relaxed', **kwargs):
     return PLConcat(Zip(args, **kwargs), how=how)
+
 
 
 @register_stream(PLStream)
@@ -197,16 +216,20 @@ class PLJoin(PLStream):
         await self(x0)
 
 
+
 def pl_join(*args:PLStream, on=None, how='full', **kwargs):
     return PLJoin(Zip(args, **kwargs), on=on, how=how)
+
 
 
 def pl_last(upstream:PLStream):
     return upstream.pl_map(lambda x: x.select(pl.last(*x.columns)))
 
 
+
 def pl_first(upstream:PLStream):
     return upstream.pl_map(lambda x: x.select(pl.first(*x.columns)))
+
 
 
 def pl_remap(upstream:PLStream, *drop, **map):

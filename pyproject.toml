@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "uvstream"
-version = "0.0.5"
+version = "0.0.6"
 authors = [
-  { name="Fish7793", email="daveravab@gmail.com" },
+  { name="Fish7793", email="asyncfish@proton.me" },
 ]
 description = "Simple stream processing inspired by streamz but with uvloop under the hood."
 readme = "README.md"
