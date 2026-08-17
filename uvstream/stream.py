@@ -34,15 +34,22 @@ class Event:
         self.awaited_args:dict[uuid.UUID, Any] = dict()
 
 
-    def emit(self, *args:Any) -> Iterable[Any]:
+    def emit(self, *args:Any, **kwargs) -> Iterable[Any]:
         for id in self.awaiting:
-            self.awaited_args[id] = args
+            self.awaited_args[id] = args, kwargs
         self.awaiting.clear()
-        return [delegate(*args) for delegate in self.delegates]
+        res = []
+        for delegate in self.delegates:
+            if inspect.isawaitable(delegate):
+                r = LOOP.create_task(delegate(*args, **kwargs))
+            else:
+                r = delegate(*args, **kwargs)
+            res.append(r)
+        return res
 
 
-    def __call__(self, *args:Any) -> Iterable[Any]:
-        return self.emit(*args)
+    def __call__(self, *args:Any, **kwargs) -> Iterable[Any]:
+        return self.emit(*args, **kwargs)
     
 
     def __add__(self, other:Callable[[Any], Any]):
@@ -94,7 +101,7 @@ class Stream:
         self.downstream:set['Stream'] = set()
         self.on_done:Event = Event()
         self.event_loop = event_loop
-
+        
         if upstream is not None:
             if isinstance(upstream, Iterable):
                 _ = [self.add_upstream(u) for u in upstream]
@@ -222,8 +229,8 @@ class Stream:
                 fn_kwargs = self.fn.keywords
                 fn_name = self.fn.func.__name__
             elif isinstance(self.fn, Callable):
-                fn_args = self.args
-                fn_kwargs = self.kwargs
+                fn_args = []
+                fn_kwargs = dict()
                 fn_name = self.fn.__name__
 
             all_args = [
@@ -621,13 +628,21 @@ class WaitTillDone(Stream):
         if isinstance(require, Stream):
             require = set([require])
         self.require = set(require) if require else set()
-        super().__init__(upstream, None, *args, **kwargs)
+        super().__init__(upstream, kwargs.get('fn', None), *args, **kwargs)
 
 
     async def update(self, x:Any, who:Stream=None):
         await asyncio.gather(*[req.on_done.invoked for req in self.require])
         await super().update(x, who)
 
+
+    def _edge_tuples(self) -> list[tuple[int, int, dict]]:
+        res = [(stream.id, self.id, self._vis_edge_props) for stream in self.upstream]
+        rprops = self._vis_edge_props.copy()
+        rprops['color'] = 'red'
+        for r in self.require:
+            res.append((r.id, self.id, rprops))
+        return res
 
 class Pipeline:
 
@@ -676,7 +691,7 @@ class Pipeline:
         nodes = []
         edges = []
         for stream in self.streams:
-            nodes.append((stream.id, dict(id=stream.id, name=f"{stream}(id={stream.id})", **stream._vis_node_props)))
+            nodes.append((stream.id, dict(id=stream.id, name=f"{stream.__str__()}", **stream._vis_node_props)))
             edge_tuples = stream._edge_tuples()
             if len(edge_tuples) > 0:
                 edges.extend(edge_tuples)
