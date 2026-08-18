@@ -40,8 +40,8 @@ class Event:
         self.awaiting.clear()
         res = []
         for delegate in self.delegates:
-            if inspect.isawaitable(delegate):
-                r = LOOP.create_task(delegate(*args, **kwargs))
+            if inspect.iscoroutinefunction(delegate):
+                r = asyncio.run_coroutine_threadsafe(delegate(*args, **kwargs), asyncio.get_running_loop())
             else:
                 r = delegate(*args, **kwargs)
             res.append(r)
