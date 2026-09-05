@@ -41,7 +41,12 @@ class Event:
         res = []
         for delegate in self.delegates:
             if inspect.iscoroutinefunction(delegate):
-                r = asyncio.run_coroutine_threadsafe(delegate(*args, **kwargs), asyncio.get_running_loop())
+                delegate = delegate(*args, **kwargs)
+            if inspect.iscoroutine(delegate):
+                r = asyncio.run_coroutine_threadsafe(
+                    delegate, 
+                    asyncio.get_running_loop()
+                )
             else:
                 r = delegate(*args, **kwargs)
             res.append(r)
@@ -203,7 +208,8 @@ class Stream:
         if self.fn is None:
             await self(x)
             return
-                
+        if inspect.iscoroutine(self.fn):
+            await self(await self.fn)
         if inspect.iscoroutinefunction(self.fn):
             await self(await self.fn(x, *self.args, **self.kwargs))
             return
@@ -291,7 +297,8 @@ class Sink(Stream):
     async def update(self, x:Any, who:'Stream'=None):
         if self.fn is None:
             return
-        
+        if inspect.iscoroutine(self.fn):
+            await self(await self.fn)
         if inspect.iscoroutinefunction(self.fn):
             await self.fn(x, *self.args, **self.kwargs)
             return
@@ -408,7 +415,9 @@ class Filter(Stream):
             return
         
         p = False
-        if inspect.iscoroutinefunction(self.fn):
+        if inspect.iscoroutine(self.fn):
+            p = await self.fn
+        elif inspect.iscoroutinefunction(self.fn):
             p = await self.fn(x, *self.args, **self.kwargs)
         else:        
             p = self.fn(x, *self.args, **self.kwargs)
